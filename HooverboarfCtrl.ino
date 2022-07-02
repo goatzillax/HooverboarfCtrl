@@ -54,7 +54,7 @@ void get_prefs(void) {
     nc_js_y_min = preferences.getUChar("nc_js_y_min", 30);
     nc_js_y_ctr = preferences.getUChar("nc_js_y_ctr", 131);
     nc_js_y_max = preferences.getUChar("nc_js_y_max", 230);
-    nc_js_expo = preferences.getUChar("nc_js_expo", 50);
+    nc_js_expo  = preferences.getUChar("nc_js_expo", 50);
 #if 0
     Serial.printf( "x center %d", nc_js_x_ctr);
     Serial.printf(" y center %d", nc_js_y_ctr);
@@ -68,10 +68,11 @@ void get_prefs(void) {
   }
 }
 
-//  hoverboard serial stats
+//  hooverboarf serial stats
 unsigned long hover_csum_fails=0;
 unsigned long hover_ser_rcvd=0;
 unsigned long hover_ser_frame_rcvd=0;
+unsigned long hover_ser_frame_last=0;
 
 struct serial_feedback_s {
 	uint16_t	start = 0xabcd;
@@ -97,8 +98,9 @@ Feedback bytes received:	%HOVER_SER_RCVD%<br>
 Feedback frames received:	%HOVER_SER_FRAME_RCVD%<br>
 Feedback csum fails:		%HOVER_CSUM_FAILS%<br>
 <br>
-Voltage: %VBAT%  Temperature:  %TEMP_C%
-
+Voltage: %VBAT%  Temperature:  %TEMP_C%<br>
+<br>
+<a href="powerbutton">P-p-p-powerbutton</a>
 <h2>Nunchuk</h2>
 <form action="/setprefs" method="get">
   X Min    <input type="number" value="%NC_JS_X_MIN%" name="nc_js_x_min" min="0" max="255">
@@ -207,9 +209,10 @@ uint16_t _raw_rc_count{};
 
 //  TAER 1234 mapping on my TX
 //  probably could enum these too
-#define RC_CHAN_ARM   4
-#define RC_CHAN_STEER 1
-#define RC_CHAN_SPEED 2
+#define RC_CHAN_STEER		1
+#define RC_CHAN_SPEED		2
+#define RC_CHAN_MOWER_ARM	4
+#define RC_CHAN_HOVER_PWR	5
 
 //  so the lore on ELRS and Betaflight is that the arm channel must be on AUX1 and is sent every packet.
 //  Betaflight requires 4 disarm packets before actually disarming.
@@ -268,13 +271,36 @@ unsigned long last_print=0;
 
 #define FS_MS 1000
 unsigned long last_good=0;
-bool failsafe=true;
-bool disarm_received=false;
+//  preset by set_fs() in setup anyways
+bool failsafe;
+unsigned long arm_count;
+unsigned long disarm_count;
 
-#define MOWER_BALE_PIN 23  //  pull to GND to prime (turns on LEDs and pulls the power pin up to 5v), release to stop
-#define MOWER_POWER_PIN 5  //  pulse to GND to start
+#define ARM_RECEIVED	(arm_count > 4)
+#define DISARM_RECEIVED (disarm_count > 4)
 
-enum states { MOWER_DISARMED, MOWER_ARMED } mower_state;
+#define MOWER_BALE_PIN	23  //  pull to GND to prime (turns on LEDs and pulls the power pin up to 5v), release to stop
+#define MOWER_POWER_PIN	5  //  pulse to GND to start
+
+//  Extended Controls
+#define HOVER_MAIN_POWER	27
+#define FAN_ENABLE		25
+#define SPARE_GPIO32		32
+
+#define FAN_DELAY		10000
+
+void start_fan() {
+	digitalWrite(FAN_ENABLE, HIGH);
+}
+
+void stop_fan() {
+	digitalWrite(FAN_ENABLE, LOW);
+}
+
+unsigned long power_last=0;
+#define POWER_PULSE		100
+
+enum mower_states { MOWER_DISARMED, MOWER_ARMED } mower_state;
 //  for independent hooverboarf arm there's not much sense in a mower_arm without hooverboarf arm...
 
 void setup() {
@@ -289,7 +315,8 @@ void setup() {
   //pinMode(MOWER_POWER_PIN,OUTPUT_OPEN_DRAIN);  // arduino output mode documentation also lacking.
 #endif
 
-  get_prefs();
+  digitalWrite(HOVER_MAIN_POWER, LOW);
+  pinMode(HOVER_MAIN_POWER, OUTPUT);
 
 #ifdef USE_WIIMOTE
    btStart();  //  if we're going to brownout, do it early.
@@ -300,7 +327,12 @@ void setup() {
    btStop();
 #endif
 
+  start_fan();
+  pinMode(FAN_ENABLE, OUTPUT);
+
+  get_prefs();
   set_fs();
+
   pinMode(MOWER_BALE_PIN,OUTPUT);
   pinMode(MOWER_POWER_PIN,OUTPUT);
 
@@ -326,7 +358,7 @@ void dump_serial() {
   int max = 5;
   char buf[64];
 
-  sprintf(buf, "str %d spd %d fs %s fb %d", hover_cmd.steer, hover_cmd.speed, failsafe ? "*":"-", hover_ser_frame_rcvd);
+  sprintf(buf, "str %d spd %d fs %s", hover_cmd.steer, hover_cmd.speed, failsafe ? "*":"-");
   Serial.println(buf);
 }
 
@@ -344,7 +376,8 @@ void arm_mower() {
 
 void set_fs() {
     failsafe=true;
-    disarm_received=false;
+    disarm_count = 0;
+    arm_count = 0;
 
     hover_cmd.steer = 0;
     hover_cmd.speed = 0;
@@ -411,6 +444,7 @@ search:
 
 			if (csum == new_feedback.csum) {
 				hover_ser_frame_rcvd++;
+				hover_ser_frame_last = millis();
 				// yeah whatever.
 				memcpy(&hover_feedback, &new_feedback, sizeof(hover_feedback));
 				// remove the rest of the frame from the circbuf
@@ -481,6 +515,32 @@ void dump_oled() {
 }
 #endif
 
+void process_arm() {
+	if (DISARM_RECEIVED) {
+		if (ARM_RECEIVED) {
+			if (mower_state == MOWER_DISARMED) {
+				arm_mower();
+			}
+		}
+		else {
+			arm_count++;
+		}
+	}  //  if we've never received a proper disarm, never arm.
+	else {
+		disarm_count = 0;  // flicking arm without a proper disarm will send you back to start
+	}
+}
+
+void process_disarm() {
+	if (DISARM_RECEIVED) {
+		arm_count = 0;
+		disarm_mower();
+	}  // don't need to keep incrementing
+	else {
+		disarm_count++;  // so flicking disarm won't disarm you and won't ruin your arm_count
+	}
+}
+
 #ifdef USE_CRSF
 void read_crsf(void) {
 	//  oh right no way this can cause any starvation right?  right?
@@ -499,26 +559,19 @@ void read_crsf(void) {
 			}
 		}
 	}
-
-	if (_raw_rc_values[RC_CHAN_ARM] > RC_MID) {
-		//  we must affirmatively receive *some* disarm packets before rearming the mower at least.
-		//  reason:  hooverboarf powers off due to temperature.
-		//  user still has mower armed on his TX switch.  user turns hooverboarf back on which turns the RX and ESP32 back on.  (This architecture may change.)
-		//  first packets it receives are actually arm, which is *badwrong*, or just *badong*.
-		if (disarm_received) {
-			if (mower_state == MOWER_DISARMED) {
-				//Serial.println("armed");
-				arm_mower();
-			}
-		}  //  if we've never received a disarm, never arm.
+	//  eh my aux2 is on a 3way currently...
+	if (_raw_rc_values[RC_CHAN_HOVER_PWR] > (RC_MID/2)) {
+		digitalWrite(HOVER_MAIN_POWER, HIGH);
 	}
 	else {
-		//if (mower_state == MOWER_ARMED) {
-		//  might do the betaflight disarm-debounce?
-		disarm_received = true;
-		//Serial.println("disarmed");
-		disarm_mower();
-		//}
+		digitalWrite(HOVER_MAIN_POWER, LOW);
+	}
+
+	if (_raw_rc_values[RC_CHAN_MOWER_ARM] > RC_MID) {
+		process_arm();
+	}
+	else {
+		process_disarm();
 	}
 
 }
@@ -569,18 +622,17 @@ void read_wiimote(void) {
 			Serial.printf(", nunchuk.stick: %3d/%3d\n", nunchuk.xStick, nunchuk.yStick);
 #endif
 			if (nunchuk.valid) {
-				if (button & BUTTON_Z) {
-					if (disarm_received) {
-						if (mower_state == MOWER_DISARMED) {
-							//Serial.println("armed");
-							arm_mower();
-						}
-					}  //  if we've never received a disarm, never arm.
+				if (button & BUTTON_C) {
+					digitalWrite(HOVER_MAIN_POWER, HIGH);
 				}
 				else {
-					disarm_received = true;
-					//Serial.println("disarmed");
-					disarm_mower();
+					digitalWrite(HOVER_MAIN_POWER, LOW);
+				}
+				if (button & BUTTON_Z) {
+					process_arm();
+				}
+				else {
+					process_disarm();
 				}
 
 				hover_cmd.steer = wii_expo(nunchuk.xStick, nc_js_x_min, nc_js_x_ctr, nc_js_x_max, nc_js_expo);
@@ -606,7 +658,6 @@ void loop() {
 				switch(oled_button.BUTTON_A) {
 					case KEY_VALUE_SHORT_PRESS:
 						Serial.println("change input");
-						disarm_received=false;
 						set_fs();
 						switch (input_mode) {
 #ifdef USE_WIIMOTE
@@ -641,6 +692,11 @@ void loop() {
 								request->send_P(200, "text/html", index_html, index_html_processor);
 							});
 
+							server.on("/powerbutton", HTTP_GET, [](AsyncWebServerRequest *request) {
+								power_last = millis();
+								digitalWrite(HOVER_MAIN_POWER, HIGH);
+								request->send(200, "text/plain", "OK");
+							});
 							server.on("/setprefs", HTTP_GET, WebSetPrefs);
 
 							server.begin();
@@ -662,6 +718,9 @@ void loop() {
 	}
 
 	if (fuckoff) {
+		if (millis()-power_last > POWER_PULSE) {
+			digitalWrite(HOVER_MAIN_POWER, LOW);
+		}  //  should integrate this with the other methods but whatevs.
 		delay(100);
 		return;
 	}
@@ -699,6 +758,14 @@ void loop() {
 	}  //  I LIKE WRITING MANUAL SCHEDULES IT IS FUN AND NOT AT ALL A BAD WAY TO TEACH PEOPLE HOW TO PROGRAM
 
 	hover_ser_recv();
+
+	if (millis()-hover_ser_frame_last > FAN_DELAY) {
+		//  kind of seems like disarm_mower() would be appropriate here too, except without so much delay...
+		stop_fan();
+	}  //  I LIKE MANUAL SCHEDULES oh wait I already said that.
+	else {
+		start_fan();
+	}
 
 	if (millis()-last_print > DEBUG_PERIOD) {
 		last_print = millis();

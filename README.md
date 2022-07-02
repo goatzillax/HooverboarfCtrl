@@ -18,17 +18,17 @@ Power button is apparently wired to the battery through a voltage divider (30k, 
 
 Schematics indicate they want to see about 2.65v max at the switch pin 1 (pulled to ground).
 
-If going from 3.3v, a 500 ohm resistor in series should produce the same thing.  Untested.
+If going from 3.3v, a 500 ohm resistor in series should produce the same thing.  Except there is some odd behavior with the power button line...
 
 #### Don't use PWM control input
 
 The board design is really noisy and the PWM implementation in the open source firmware is pretty badly mangled, so just don't go there.
 
-Even the serial ports are susceptible, however they implement checksums.  My stats indicate only like %6 of serial packets even pass checksum.  Soo...  yeah I'm basically burning a lot of power just to fail.
+Even the serial ports are susceptible, however they implement checksums.  My stats indicate only like 6% of serial packets even pass checksum.  Soo...  yeah I'm basically burning a lot of power just to fail.
 
 ### Motors
 
-350W
+200-350W (seems to vary)
 
 16mm axles; various axial lengths.
 
@@ -161,17 +161,56 @@ UART2 GPIO17 (RX), GPIO16 (TX) hooked up to hooverboarf.
 GPIO23 Mower bale pin.
 GPIO5 Mower power pin.  GPIO5 I guess waggling at powerup is OK because GPIO23 is also "pulled open".
 
+### Extended Controls
+
+OK I'm squatting more pins for extended controls.  These are ESP32 only; no more ESP8266.  We're well past that, Jerry.
+
+* GND
+* GPIO27 - Hooverboarf main power
+* GPIO25 - Fan power
+* GPIO22 - Something something something dark side
+
+Nota bene:  My hooverboarf powers up automatically when I turn my ESP32 regulator on.  It...  shouldn't be doing that.  Not sure what the deal is; probably has something to do with some low side switching, I give up.
+
+Fan power I'm just linking to whether or not the hooverboarf is powered up, i.e. if it's receiving feedback packets.  Might be able to PWM the EN of the regulators and tie it to temperature.
+
 ## HappyModel EP1/EP2
 
 Runs ExpressLRS.  Wants 5v.
 
-## 5v Regulator
+## Regulators
 
-Might want another regulator to switch fans on/off.
+It's possible to power off the side board ports, however those are 14.5v 200ma max (total!), so nix on that.  Seems like unnecessary risk if you're going to run more than just the ESP32.
 
-If powering direct off main voltage, make sure it can take it (10s max voltage is 42v!).
+Getting off-the-shelf regulators that can handle 42v input is kind of a bastard.
 
-Can possibly power off the side board ports, however those are 14.5v 200ma max (total!).
+So this isn't cool, but I'm using multiple regulators to power/control the peripherals.
+
+### 120v (!) step down to 12v 3A
+
+First regulator to taste the raw 42v looks like this one:
+
+![Yamums a hoebag](/docs/images/reg_12v_front.jpg )
+![Yamums a hoebag](/docs/images/reg_12v_back.jpg )
+
+After the voltage has been dropped to 12v it's way easier to find regulators and even switches to handle the rest of the work.
+
+### 4.5-20v step down adjustable 10W
+
+The recent batch of widely available adjustable regulators looks like this:
+
+![Yamums a hoebag](/docs/images/reg_adjust.jpg )
+
+These are vaguely less overtly retarded than their predecessors because:
+
+1.  Only need to desolder a jumper instead of literally trying to cut a tiny trace in order to disable the pot or use the EN port.
+2.  TWO ground pads for users.
+
+One regulator is fixed at 5v to power the ESP32 and EP1/2 and permanently enabled.
+
+Two regulators are keep the adjustable pots and the EN port enabled so the ESP32 can turn them on/off.  These control cooling fans:  one for main board, one for battery.
+
+Oh, and the EN port is active-high.  Don't ask me why their picture makes it look like you're supposed to use an open-drain output.
 
 # Software
 
@@ -189,17 +228,23 @@ Started with the PWM variant but switched to USART for checksums and feedback.
 
 Yo dawg I herd u liek long range RC.
 
+All kidding aside, there is a firmware for the EP1/2 which give it two PWM output channels, which is actually like the bare minimum to control the hooverboarf.  So, u know, good for testing.
+
 ## Arduino
 
 Blech.  I feel like we're teaching an entire generation of future programmers all the wrong lessons.
 
 ## ESP32Wiimote
 
-Dropped my X-Lite in the sandy loam multiple times.  Do you know how hard it is to clean that off that already annoying rubberized texture?  Also thanks FrSky for doing stuff like not building in a lanyard attachment and hosing your own product compatibility..  Everybody hates you now.  You destroyed all the goodwill you had built up in the community.  Nobody likes you.  How does that feel?
+Dropped my X-Lite in the sandy loam multiple times.  Do you know how hard it is to clean that off the already annoying rubberized texture?  Also thanks FrSky for doing stuff like not building in a lanyard attachment and hosing your own product compatibility..  Everybody hates you now.  You destroyed all the goodwill you had built up in the community.  Nobody likes you.  How does that feel?
+
+Anyways, I had to modify the lib a little because available() only reported input changes (bad for detecting failsafe) and totally shat itself when it came to disconnecting the nunchuk (which is also bad for detecting failsafe).  So yeah, low confidence.
 
 ## CircularBuffer
 
 Parsing the hooverboarf serial feedback.
+
+Kind of would like a shift(int count) for dropping a chunk of the buffer at once, but whatevs.
 
 # Todo/Options
 
@@ -212,14 +257,6 @@ The original plan was to actually have a Betaflight controller in here but:
 3.  I did have 3 Minikits laying around.
 4.  Was going to just have it pump out PWM to the hooverboarf but PWM turned out to be a total cluster anyways.
 
-## Additional controls
-
-Separate hooverboarf powerup pin.
-
-Separate fan power pin.
-
-Need a smol, cheap stepdown regulator that will handle at least 42v.
-
 ## T-Watch 2020 interface
 
 Might want some debug to pop out on that interface, maybe even a controller.
@@ -230,7 +267,11 @@ Not looking forward to that though.
 
 ## Talking back through the Wiimote might also be fun
 
+https://wiibrew.org/wiki/Wiimote#Speaker
+
 Bluetooth sucks.
+
+Might go for the rumble as well.
 
 ## Solar charger
 
