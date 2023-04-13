@@ -14,9 +14,9 @@ Split mainboards are less well known.
 
 #### Power button
 
-Power button is apparently wired to the battery through a voltage divider (30k, 5k resistors).
+Power button is apparently wired to the battery through a voltage divider (30k, 2k resistors).
 
-Schematics indicate they want to see about 2.65v max at the switch pin 1 (pulled to ground).
+Schematics indicate they want to see about 2.625v max at the switch pin 1 (pulled to ground).
 
 If going from 3.3v, a 500 ohm resistor in series should produce the same thing.  Except there is some odd behavior with the power button line...
 
