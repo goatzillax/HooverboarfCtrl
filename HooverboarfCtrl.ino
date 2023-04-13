@@ -20,6 +20,10 @@ uint8_t nc_js_expo;
 
 ButtonState button;
 NunchukState nunchuk;
+
+//  Jeebus this blows up progmem usage; disable OTA in partition scheme plox.
+#include "esp_bt_main.h"
+#include "esp_bt_device.h"
 #endif
 
 #include <Preferences.h>
@@ -112,9 +116,27 @@ Voltage: %VBAT%  Temperature:  %TEMP_C%<br>
   Expo <input type="number" value="%NC_JS_EXPO%" name="nc_js_expo" min="0" max="100"><br><br>
   <input type="submit" value="Submit">
 </form>
+<br>
+<h2>Bluetooth</h2>
+MAC:  %BT_MAC%
 </body>
 </html>
 )rawliteral";
+
+
+#ifdef USE_WIIMOTE
+String bt_mac_to_str() {
+	const uint8_t *bt_mac = esp_bt_dev_get_address();
+	char retval[20] = {0};
+
+	//  I FUCKING LOVE C++
+	sprintf(retval, "%02x:%02x:%02x:%02x:%02x:%02x",
+		bt_mac[0], bt_mac[1], bt_mac[2],
+		bt_mac[3], bt_mac[4], bt_mac[5]);
+
+	return String(retval);
+}
+#endif
 
 String index_html_processor(const String& var) {
 	if (var == "HOVER_SER_RCVD") {
@@ -153,6 +175,11 @@ String index_html_processor(const String& var) {
 	if (var == "NC_JS_EXPO") {
 		return String(nc_js_expo);
 	}
+#ifdef USE_WIIMOTE
+	if (var == "BT_MAC") {
+		return bt_mac_to_str();
+	}
+#endif
 	return String();
 }
 
@@ -320,6 +347,9 @@ void setup() {
 
 #ifdef USE_WIIMOTE
    btStart();  //  if we're going to brownout, do it early.
+   esp_bluedroid_init();   //  real cute, espressif.
+   esp_bluedroid_enable(); //  real cute, espressif.
+
    input_mode = INPUT_WIIMOTE;  // this is the default?
    wiimote.init();
    //wiimote.addFilter(ACTION_IGNORE, FILTER_ACCEL);
