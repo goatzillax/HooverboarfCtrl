@@ -38,6 +38,23 @@ Kind of a challenge to mount.
 
 Fair warning:  if you have a level lawn this is fine, but if you have a sloped or bumpy lawn two motors might not cut it.
 
+### No Standards
+
+Apparently there are no standards across (and sometimes within) hooverboarfs.
+
+The motors tend to use female 3.5mm bullet connectors, with the controllers using male.
+
+Sometimes the Hall sensors use JST-SM, sometimes they use JST-XH.
+
+The wire coloring/ordering doesn't appear consistent between between components, however it looks like it's consistent within a component.
+
+Seemingly you can make it work by following the color from the Hall sensor out the motor into the controller, then back out to the same color from controller to the original motor wire color.
+
+i.e. Motor Hall Sensor Green -> PCB Hall Sensor Blue -> PCB Motor Power Wire Blue -> Motor Power Wire Green
+
+Note it conceptually went from Green to Green.
+
+
 ### Battery
 
 Typically come in 7s (25.2 nominal) or 10s (36v nominal) Li-Ion configurations.  Super dangerous.
